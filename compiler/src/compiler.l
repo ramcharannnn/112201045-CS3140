@@ -1,3 +1,4 @@
+/* compiler.l */
 %{
 	#include <stdio.h>
 	#include <stdlib.h>
@@ -12,14 +13,31 @@ digit   [0-9]
 letter  [a-zA-Z]
 
 %%
-
-begindecl               { return DECL; }
+begin					{ return BEG; }
+begindecl				{ return BEGINDECL;}
 enddecl                 { return ENDDECL; }
 integer                 { return T_INT; }
+float                   {return T_FLOAT;}
 print                   { return PRINT; }
-write                   { return WRITE; } 
-
+write                   { return WRITE; }
+decl   					{ return DECL; }
+end						{ return END;}
+if                      { return IF; }
+then                    { return THEN; }
+else                    { return ELSE; }
+endif                   { return ENDIF; }
+do						{ return DO;}
+while					{ return WHILE;}
+endwhile				{ return ENDWHILE;}
+for                     { return FOR; }
+break                   { return BREAK; }
+"=="                    { return EQUALEQUAL; }
+"<="                    { return LESSTHANOREQUAL; }
+">="                    { return GREATERTHANOREQUAL; }
+"!="                    { return NOTEQUAL; }
 {digit}+                { yylval.num = atoi(yytext); return NUM; }
+[0-9]+"."[0-9]+     	{ yylval.fnum = atof(yytext); return FLOAT; }
+<<EOF>> { return 0; }
 
 {letter}({letter}|{digit})*   { yylval.var = strdup(yytext); return VAR; }
 [-+*/=()><;,\{\}\[\]\%]         { return yytext[0]; }
@@ -29,6 +47,7 @@ write                   { return WRITE; }
 
 %%
 
-int yywrap() {
+int yywrap(void) {
     return 1;
 }
+

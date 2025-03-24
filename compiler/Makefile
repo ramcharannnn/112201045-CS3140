@@ -19,7 +19,7 @@ EXEC = $(BIN_DIR)/compiler
 all: $(EXEC)
 
 $(EXEC): $(YACC_OUT_C) $(LEX_OUT) $(TREE_SRC)
-	$(CC) -o $(EXEC) $(LEX_OUT) $(YACC_OUT_C) $(TREE_SRC) -I$(INC_DIR) -ll -lm
+	$(CC)  -o $(EXEC) $(LEX_OUT) $(YACC_OUT_C) $(TREE_SRC) -I$(INC_DIR) -ll -lm -w
 
 $(YACC_OUT_C): $(YACC_SRC)
 	$(YACC) $(YACC_SRC)

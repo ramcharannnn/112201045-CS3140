@@ -11,6 +11,7 @@ begin
 	l= 0;
 	r = 9;
 	key = arr [5];
+	
 	for(;l<r;){
 		mid = (l + r) / 2;
 		if (arr[mid] == key) then
