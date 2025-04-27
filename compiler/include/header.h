@@ -14,11 +14,12 @@ typedef enum {
 } exprtype;
 
 typedef enum {
+    LIST,
     ADD,
     SUB,
     MUL,
     DIV,
-    ASSIGN_OP,
+    ASSIGN_OP, 
     EQUAL,
     LESS,
     GREATER,
@@ -32,6 +33,7 @@ typedef enum {
     BEG_STMT,
     ASSIGN,
     WRITE_STMT,
+    READ_STMT,
     END_DECL,
     END_STMT,
     COND_STMT,
@@ -153,4 +155,19 @@ checking updateSymbolTable(char* name, int val);
 checking updateArrayElement(char* name, int index, int val);
 void freeExpr(expr_node* root);
 void freeStmtList(stmt_list* root);
+
+
+const char* newLabel();  // Declaration
+void initAssemblyFile(const char* inputFileName);
+void finalizeAssemblyFile();
+void genDataSection();
+void genExpr(expr_node *node, int targetReg);
+void genAssign(expr_node* left, expr_node* right);
+void genWriteStmt(expr_node* expr);
+void genIfStmt(expr_node* condition, stmt_list* thenBranch, stmt_list* elseBranch);
+void genForLoop(stmt_list* init, expr_node* condition, stmt_list* update, stmt_list* body);
+void genDoWhileLoop(expr_node* condition, stmt_list* body);
+void genStmtList(stmt_list* root);
+void genProgCode(stmt_list* root);
+char* getNewLabel(const char* prefix);
 #endif

@@ -36,6 +36,7 @@
     struct stmt_list* stmt_list_ptr;
 }
 %token RETURN MAIN
+%token INC
 %token T_INT T_BOOL T_FLOAT
 %token PRINT
 %token BEGINDECL
@@ -51,18 +52,18 @@
 %token <fnum> FLOAT
 
 
-
+%right INC  
 %left '<' '>'
 %left EQUALEQUAL LESSTHANOREQUAL GREATERTHANOREQUAL NOTEQUAL
 %left '+' '-'
 %left '*' '/'
 
 %type <expr_ptr> expr var_expr exprList
-%type <stmt_list_ptr> Prog statement stmt_list assign_stmt write_stmt cond_stmt Gdecl_sec Gdecl_list Gdecl MainBlock Ldecl_sec Ldecl_list Ldecl init_assign update_assign
+%type <stmt_list_ptr> Prog statement stmt_list assign_stmt write_stmt read_stmt cond_stmt Gdecl_sec Gdecl_list Gdecl MainBlock Ldecl_sec Ldecl_list Ldecl init_assign update_assign
 %type <num> ret_type type
 %type <decl_node_ptr> Glist Gid Lid Lid_list
-%type <var> func func_name main
-//%type <stmt_list_ptr> func_stmt func_call param_list para
+
+//%type <stmt_list_ptr>  
 %%
 
 Prog    :   Gdecl_sec  stmt_list {
@@ -74,6 +75,7 @@ Prog    :   Gdecl_sec  stmt_list {
                      printf("\n\nSymbol Table Values\n");
                          printf("-------------------\n");
                          printSymbolTableValues();
+                          genProgCode($$);
                      }
         |Gdecl_sec BEG stmt_list END { 
                      $$ = $3; 
@@ -82,8 +84,10 @@ Prog    :   Gdecl_sec  stmt_list {
                      evalProg($$);
                      printf("\nSymbol Table Values\n");
                      printSymbolTableValues();
+                     genProgCode($$);
                    }
-        |   MainBlock { $$ = $1; }
+        |   MainBlock { $$ = $1;
+        genProgCode($$); }
 
         ;
 
@@ -229,18 +233,34 @@ stmt_list:   /* NULL */                { $$ = NULL; }
 
 statement:  assign_stmt  ';'    {$$ = $1; }
     |   write_stmt ';'        {$$ = $1; }
+    |   read_stmt ';'        {$$ = $1; }
     |   cond_stmt             { $$ = $1; }
     |    BREAK ';'                { $$ = newStmt(BREAK_STMT, NULL, NULL, NULL, NULL); $$->line_num = lineno; }
     ;
 //
 write_stmt: WRITE '(' exprList ')' { $$ = newStmt(WRITE_STMT, $3, NULL, NULL, NULL); $$->line_num = lineno; }
     ;
-exprList: expr { $$ = $1; }
-        | exprList ',' expr {
-            expr_node* temp = opNode(OP, $1, $3, ADD, 0, NULL, NULL);
-            $$ = temp;
-        }
-    ;
+read_stmt: READ '(' exprList ')' {
+    $$ = newStmt(READ_STMT, $3, NULL, NULL,NULL);
+    $$->line_num = lineno;
+
+    // ADD THIS CHECK IMMEDIATELY AFTER READING 'len'
+    ////if (strcmp(((expr_node *)$3)->name, "len") == 0) { // Assuming 'len' is the variable name
+    //    $$->next = (stmt_list*)malloc(sizeof(stmt_list));
+    //    if ($$->next == NULL) {
+    //        yyerror("Memory allocation error");
+    //    }
+    //    $$->next->type = -1; //Just a flag
+    //    $$->next->tree.root = NULL;
+    //    $$->next->next = NULL;
+    //}
+}
+
+exprList: expr                   { $$ = $1; }
+        | exprList ',' expr      { 
+            $$ = opNode(LIST, $1, $3, OP, 0, NULL, NULL); 
+          }
+        ;
 
 assign_stmt:  var_expr '=' expr         { $$ = newStmt(ASSIGN , $1 , $3, NULL, NULL);    $$->line_num = lineno ;   }
     ;
@@ -258,6 +278,14 @@ init_assign:
 
 update_assign: 
     assign_stmt  { $$ = $1; }  // Already has type from %type
+    | VAR INC ';'                 {
+          /* i++ → i = i + 1 */
+          expr_node *var_n = opNode(VARIABLE, NULL, NULL, ADD, 0, $1, NULL);
+          expr_node *one_n = opNode(INTEGER,  NULL, NULL, ADD, 1, NULL, NULL);
+          $$ = newStmt(ASSIGN, var_n, one_n, NULL, NULL);
+          $$->line_num = lineno;
+      }
+  //| expr ';'     { $$ = newStmt(ASSIGN, $1, NULL, NULL, NULL); }  // Handle expressions like i++
   | /* empty */  { $$ = NULL; }  // Type declared via %type <stmt_list_ptr>
 /*func_stmt:	func_call 		{ 		$$ = newStmt(FUNC_CALL, NULL, NULL, NULL, NULL); 				}
 		;
@@ -295,6 +323,7 @@ expr    :   NUM                 { $$ = opNode(INTEGER , NULL , NULL , ADD , $1, 
     |   expr '>' expr { $$ = opNode(OP, $1, $3, GREATER, 0, NULL, NULL); }
     ;
 
+
 var_expr:   VAR { $$ = opNode(VARIABLE , NULL , NULL , ADD , 0 , $1, NULL); }
     |   var_expr '[' expr ']' { $$ = opNode(VARIABLE, NULL, NULL, ADD, 0, ((expr_node *)$1)->name, $3); }
     ;
@@ -310,16 +339,27 @@ void yyerror(const char *s){
 }
 int main(int argc, char *argv[]) {
     initializeSymbolTable();
-    if (argc != 2){
+    
+    if (argc != 2) {
         fprintf(stderr, "Usage: %s <input_file>\n", argv[0]);
         exit(1);
     }
+    
     yyin = fopen(argv[1], "r");
-    if (yyin == NULL){
+    if (yyin == NULL) {
         fprintf(stderr, "Failed to open input file '%s'\n", argv[1]);
         exit(1);
     }
+    
+    // Initialize assembly file
+    initAssemblyFile(argv[1]);
+    
+    // Parse input
     yyparse();
+    
+    // Generate code and finalize assembly file
+    finalizeAssemblyFile();
+    
     fclose(yyin);
     return 0;
 }

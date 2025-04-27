@@ -20,6 +20,7 @@ integer                 { return T_INT; }
 float                   {return T_FLOAT;}
 print                   { return PRINT; }
 write                   { return WRITE; }
+read                    {return READ;}
 decl   					{ return DECL; }
 end						{ return END;}
 if                      { return IF; }
@@ -35,6 +36,7 @@ break                   { return BREAK; }
 "<="                    { return LESSTHANOREQUAL; }
 ">="                    { return GREATERTHANOREQUAL; }
 "!="                    { return NOTEQUAL; }
+"++"   					{ return INC; } 
 {digit}+                { yylval.num = atoi(yytext); return NUM; }
 [0-9]+"."[0-9]+     	{ yylval.fnum = atof(yytext); return FLOAT; }
 <<EOF>> { return 0; }
@@ -43,6 +45,7 @@ break                   { return BREAK; }
 [-+*/=()><;,\{\}\[\]\%]         { return yytext[0]; }
 [ \t]                   ;
 [\n]                    { lineno++; }
+"//".*                  ;   // Skip comments
 .                       { fprintf(stderr, "Error: Illegal character '%s' on line %d\n", yytext, lineno); }
 
 %%

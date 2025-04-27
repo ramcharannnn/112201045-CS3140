@@ -2,10 +2,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
+
 #include "../include/header.h"
 
+
 int symbolTableIndex = 0;
-symbolDataType symbolTable[SYMBOL_TABLE_SIZE];
+symbolDataType symbolTable[SYMBOL_TABLE_SIZE];FILE* asmFile = NULL;
+
+
+
+
 
 void initializeSymbolTable() {
     for (int i = 0; i < SYMBOL_TABLE_SIZE; i++) {
@@ -134,6 +141,9 @@ stmt_list* newStmt(stmt_type type, expr_node* expr1, expr_node* expr2, stmt_list
             new_stmt->tree.root = opNode(OP, expr1, expr2, ASSIGN_OP, 0, NULL, NULL);
             break;
         case WRITE_STMT:
+            new_stmt->tree.root = expr1;
+            break;
+          case READ_STMT:
             new_stmt->tree.root = expr1;
             break;
         case BREAK_STMT:  
@@ -283,6 +293,14 @@ void printAst(stmt_list* root, int indent) {
                 printf("E\n");
                 printExpr(root->tree.root, indent + 2);
                 break;
+            case READ_STMT:
+                 printf("READ_STMT\n");
+                 for (int i = 0; i < indent+1; ++i) {
+                     printf("|   ");
+                 }
+                 printf("E\n");
+                 printExpr(root->tree.root, indent + 2);
+                 break;
             case COND_STMT:
                 printf("COND_STMT\n");
                 switch (root->tree.cond_stmt.type) {
@@ -642,7 +660,7 @@ void freeStmtList(stmt_list* root) {
         stmt_list* temp = root;
         root = root->next;
         
-        if (temp->type == ASSIGN || temp->type == WRITE_STMT) {
+        if (temp->type == ASSIGN || temp->type == WRITE_STMT || temp->type== READ_STMT) {
             if (temp->tree.root) {
                 freeExpr(temp->tree.root);
                 temp->tree.root = NULL;  
@@ -673,68 +691,435 @@ void freeStmtList(stmt_list* root) {
         free(temp);
     }
 }
-// int evalExpr(expr_node* root, int line_num) {
-//     if (root == NULL) {
-//         return 0;
-//     }
 
-//     switch (root->type) {
-//         case OP: {
-//             int lval = evalExpr(root->left, line_num);
-//             int rval = evalExpr(root->right, line_num);
-//             switch (root->op) {
-//                 case ADD: return lval + rval;
-//                 case SUB: return lval - rval;
-//                 case MUL: return lval * rval;
-//                 case DIV:
-//                     if (rval != 0) {
-//                         return lval / rval;
-//                     } else {
-//                         fprintf(stderr, "Division by zero is not allowed - line %d\n", line_num);
-//                         exit(1);
-//                     }
-//                 case EQUAL: return lval == rval;
-//                 case LESS: return lval < rval;
-//                 case GREATER: return lval > rval;
-//                 case LESSEQUAL: return lval <= rval;
-//                 case GREATEREQUAL: return lval >= rval;
-//                 case NOTEQUALS: return lval != rval;
-//                 default:
-//                     fprintf(stderr, "Unexpected op_type in evalExpr: %d\n", root->op);
-//                     exit(1);
-//             }
-//         }
-//         case INTEGER: return root->conval;
-//         case VARIABLE: {
-//             SearchResult res = search(root->name);
-//             if (res.check == DEF) {
-//                 int index_val = 0;
-//                 if (root->index != NULL) {
-//                     index_val = evalExpr(root->index, line_num);
-//                 }
-//                 for (int i = 0; i < symbolTableIndex; i++) {
-//                     if (strcmp(symbolTable[i].name, root->name) == 0) {
-//                         if (symbolTable[i].array != NULL) {
-//                             if (index_val >= 0 && index_val < symbolTable[i].array_size) {
-//                                 return symbolTable[i].array[index_val];
-//                             } else {
-//                                 fprintf(stderr, "Array index out of bounds - line %d\n", line_num);
-//                                 exit(1);
-//                             }
-//                         } else {
-//                             return symbolTable[i].value;
-//                         }
-//                     }
-//                 }
-//                 fprintf(stderr, "Variable %s declared but not found in evalExpr\n", root->name);
-//                 exit(1);
-//             } else {
-//                 fprintf(stderr, "Variable %s not defined\n", root->name);
-//                 exit(1);
-//             }
-//         }
-//         default:
-//             fprintf(stderr, "Unexpected exprtype in evalExpr: %d\n", root->type);
-//             exit(1);
-//         }
-//     }
+
+
+
+
+
+
+
+// Code generation state
+static int tempReg = 0;
+static int labelCounter = 0;
+static int currentDepth = 0;
+
+// Helper macros
+#define MAX_REG 10
+#define INDENT() for(int i=0; i<currentDepth; i++) fprintf(asmFile, "\t")
+#define FRAME_SIZE 40
+
+
+
+// // Prototypes
+void genExpr(expr_node *node, int targetReg);
+void genStmtList(stmt_list *stmt);
+const char* newLabel();
+
+
+const char* newLabel(const char* type) {
+    static _Atomic int counter = 0;  // Thread-safe counter
+    static __thread char buf[64];    // Thread-local buffer
+    
+    snprintf(buf, sizeof(buf), "L_%s_%d", type, counter++);
+    return buf;
+}
+// Register management
+int getReg() {
+    if(tempReg >= MAX_REG) {
+        fprintf(stderr, "Register overflow!\n");
+        exit(1);
+    }
+    return tempReg++;
+}
+
+void freeReg() {
+    if(tempReg > 0) tempReg--;
+}
+
+void resetReg() {
+    tempReg = 0;
+}
+
+// Array bounds checking
+void genArrayBoundsCheck(const char* name, int idxReg) {
+    // Find array size in symbol table
+    for (int i = 0; i < symbolTableIndex; i++) {
+        if (strcmp(symbolTable[i].name, name) == 0) {
+            fprintf(asmFile, "li $t%d, %d\n", tempReg, symbolTable[i].array_size);
+            fprintf(asmFile, "bge $t%d, $t%d, handle_array_bounds_error\n", idxReg, tempReg);
+            break;
+        }
+    }
+    fprintf(asmFile, "bltz $t%d, handle_array_bounds_error\n", idxReg);
+}
+// Error handlers
+void genErrorHandlers() {
+    fprintf(asmFile, "handle_array_bounds_error:\n");
+    fprintf(asmFile, "\tla $a0, array_bounds_error\n");
+    fprintf(asmFile, "\tli $v0,4\n");
+    fprintf(asmFile, "\tsyscall\n");
+    fprintf(asmFile, "\tli $v0,10\n");
+    fprintf(asmFile, "\tsyscall\n");
+
+    fprintf(asmFile, "div_error:\n");
+    fprintf(asmFile, "\tla $a0, div_by_zero_msg\n");
+    fprintf(asmFile, "\tli $v0,4\n");
+    fprintf(asmFile, "\tsyscall\n");
+    fprintf(asmFile, "\tli $v0,10\n");
+    fprintf(asmFile, "\tsyscall\n");
+}
+
+void genDataSection() {
+    fprintf(asmFile, ".data\n");
+    fprintf(asmFile, ".align 2\n");
+    fprintf(asmFile, "array_bounds_error: .asciiz \"Array index out of bounds!\\n\"\n");
+    fprintf(asmFile, "div_by_zero_msg: .asciiz \"Division by zero error!\\n\"\n");
+    
+    for (int i = 0; i < symbolTableIndex; i++) {
+        if (symbolTable[i].check == DEF) {
+            fprintf(asmFile, ".align 2\n");
+            fprintf(asmFile, "%s: .space %d\n", 
+                symbolTable[i].name, 
+                (symbolTable[i].array_size > 0) ? 
+                symbolTable[i].array_size * 4 : 4);
+        }
+    }
+}
+
+void genMainPrologue() {
+    fprintf(asmFile, ".text\n.globl main\nmain:\n");
+    fprintf(asmFile, "\taddiu $sp,$sp,-%d\n", FRAME_SIZE);
+    fprintf(asmFile, "\tsw $fp,%d($sp)\n", FRAME_SIZE-4);
+    fprintf(asmFile, "\tsw $ra,%d($sp)\n", FRAME_SIZE-8);
+    fprintf(asmFile, "\tmove $fp,$sp\n");
+}
+
+void genMainEpilogue() {
+    fprintf(asmFile, "\tmove $sp,$fp\n");
+    fprintf(asmFile, "\tlw $ra,%d($sp)\n", FRAME_SIZE-8);
+    fprintf(asmFile, "\tlw $fp,%d($sp)\n", FRAME_SIZE-4);
+    fprintf(asmFile, "\taddiu $sp,$sp,%d\n", FRAME_SIZE);
+    fprintf(asmFile, "\tli $v0,10\n");  // Exit syscall
+    fprintf(asmFile, "\tsyscall\n");
+}
+   
+void genExpr(expr_node* node, int targetReg) {
+    if (!node) return;
+
+    switch (node->type) {
+        case INTEGER:
+            fprintf(asmFile, "    li $t%d, %d\n", targetReg, node->conval);
+            break;
+        case VARIABLE:
+             if (node->name == NULL) {
+                fprintf(stderr, "Error: Variable name is NULL\n");
+                exit(1);
+            }
+            if (node->index) {
+            int idxReg = getReg();
+            genExpr(node->index, idxReg);
+            fprintf(asmFile, "la $t%d, %s\n", targetReg, node->name); // Base address
+            fprintf(asmFile, "sll $t%d, $t%d, 2\n", idxReg, idxReg); // Multiply index by 4
+            fprintf(asmFile, "addu $t%d, $t%d, $t%d\n", targetReg, targetReg, idxReg); // Add offset
+            fprintf(asmFile, "lw $t%d, 0($t%d)\n", targetReg, targetReg); // Load value
+            freeReg();
+            } else {
+                fprintf(asmFile, "    lw $t%d, %s\n", targetReg, node->name);
+            }
+            break;
+        case OP: {
+            int leftReg = getReg();
+            int rightReg = getReg();
+            genExpr(node->left, leftReg);
+            genExpr(node->right, rightReg);
+            switch (node->op) {
+                case ADD: fprintf(asmFile, "    add $t%d, $t%d, $t%d\n", targetReg, leftReg, rightReg); break;
+                case SUB: fprintf(asmFile, "    sub $t%d, $t%d, $t%d\n", targetReg, leftReg, rightReg); break;
+                case MUL: fprintf(asmFile, "    mul $t%d, $t%d, $t%d\n", targetReg, leftReg, rightReg); break;
+                case DIV: 
+                    fprintf(asmFile, "    beq $t%d, $zero, div_error\n", rightReg);  // Use $zero instead of 0
+                    fprintf(asmFile, "    div $t%d, $t%d\n", leftReg, rightReg);
+                    fprintf(asmFile, "    mflo $t%d\n", targetReg);
+                    break;
+                // Handle other operations similarly
+            }
+            freeReg(); freeReg();
+            break;
+        }
+    }
+}
+// Assignment generation
+void genAssign(expr_node *target, expr_node *value) {
+    int valReg = getReg();
+    genExpr(value, valReg);
+    
+    if(target->index) {
+        int idxReg = getReg();
+        genExpr(target->index, idxReg);
+        genArrayBoundsCheck(target->name, idxReg);
+        fprintf(asmFile, "\tsll $t%d,$t%d,2\n", idxReg, idxReg);
+        fprintf(asmFile, "\tla $t%d,%s\n", valReg+1, target->name);
+        fprintf(asmFile, "\tadd $t%d,$t%d,$t%d\n", valReg+1, valReg+1, idxReg);
+        fprintf(asmFile, "\tsw $t%d,0($t%d)\n", valReg, valReg+1);
+        freeReg();
+    } else {
+        fprintf(asmFile, "\tsw $t%d,%s\n", valReg, target->name);
+    }
+    freeReg();
+}
+
+
+void genWriteStmt(expr_node* expr) {
+    expr_node* current = expr;
+    int is_first = 1;
+
+    while (current != NULL) {
+        // Handle LIST nodes (multiple arguments)
+        if (current->type == OP && current->op == LIST) {
+            // Process left operand (current value to print)
+            int reg = getReg();
+            genExpr(current->left, reg);
+            
+            // Print space separator after first element
+            if (!is_first) {
+                fprintf(asmFile, "\tli $a0, 32\n");  // ASCII space
+                fprintf(asmFile, "\tli $v0, 11\n");
+                fprintf(asmFile, "\tsyscall\n");
+            }
+            
+            // Print the value
+            fprintf(asmFile, "\tmove $a0, $t%d\n", reg);
+            fprintf(asmFile, "\tli $v0, 1\n");
+            fprintf(asmFile, "\tsyscall\n");
+            freeReg();
+            
+            is_first = 0;
+            current = current->right;
+        } 
+        // Handle single argument or last element
+        else {
+            int reg = getReg();
+            genExpr(current, reg);
+            
+            // Print space separator if not first
+            if (!is_first) {
+                fprintf(asmFile, "\tli $a0, 32\n");
+                fprintf(asmFile, "\tli $v0, 11\n");
+                fprintf(asmFile, "\tsyscall\n");
+            }
+            
+            fprintf(asmFile, "\tmove $a0, $t%d\n", reg);
+            fprintf(asmFile, "\tli $v0, 1\n");
+            fprintf(asmFile, "\tsyscall\n");
+            freeReg();
+            current = NULL;
+        }
+    }
+    
+    // Print newline after all arguments
+    fprintf(asmFile, "\tli $a0, 10\n");  // ASCII newline
+    fprintf(asmFile, "\tli $v0, 11\n");
+    fprintf(asmFile, "\tsyscall\n");
+}
+void checkVariableExists(char* name, int line) {
+    if (search(name).check == UNDECL) {
+        fprintf(stderr, "Error: Variable '%s' undeclared (line %d)\n", name, line);
+        exit(1);
+    }
+}
+
+
+// Helper to read into a single variable/array element
+void genRead(expr_node *target) {
+    if (target->type != VARIABLE || target->name == NULL) {
+        fprintf(stderr, "Error: Invalid read target\n");
+        exit(1);
+    }
+        SearchResult res = search(target->name);
+    if (res.check == UNDECL) {
+        fprintf(stderr, "Error: Reading undeclared variable '%s'\n", target->name);
+        exit(1);
+    }
+    int addrReg = getReg();
+    
+    if (target->index) {  // Array element
+        int idxReg = getReg();
+        genExpr(target->index, idxReg);
+        genArrayBoundsCheck(target->name, idxReg);
+        
+        // Calculate address: base + index*4
+        fprintf(asmFile, "\tsll $t%d, $t%d, 2\n", idxReg, idxReg);
+        fprintf(asmFile, "\tla $t%d, %s\n", addrReg, target->name);
+        fprintf(asmFile, "\tadd $t%d, $t%d, $t%d\n", addrReg, addrReg, idxReg);
+        freeReg();
+    } else {  // Simple variable
+        fprintf(asmFile, "\tla $t%d, %s\n", addrReg, target->name);
+    }
+    
+    // Read input
+    fprintf(asmFile, "\tli $v0, 5\n");
+    fprintf(asmFile, "\tsyscall\n");
+    
+    // Store value
+    fprintf(asmFile, "\tsw $v0, 0($t%d)\n", addrReg);
+    freeReg();
+}
+
+void genReadStmt(expr_node *exprList) {
+    expr_node *current = exprList;
+    while (current) {
+        if (current->type == OP && current->op == LIST) {
+            // Handle comma-separated list
+            if (current->left->type != VARIABLE || current->left->name == NULL) {
+                fprintf(stderr, "Error: Invalid read target in list\n");
+                exit(1);
+            }
+
+            // Check if variable is declared
+            SearchResult res = search(current->left->name);
+            if (res.check == UNDECL) {
+                fprintf(stderr, "Error: Reading undeclared variable '%s'\n", current->left->name);
+                exit(1);
+            }
+
+            // Generate code for this variable
+            genRead(current->left);
+
+            // Move to next element in the list
+            current = current->right;
+        } 
+        else if (current->type == VARIABLE) {
+            // Single variable case
+            SearchResult res = search(current->name);
+            if (res.check == UNDECL) {
+                fprintf(stderr, "Error: Reading undeclared variable '%s'\n", current->name);
+                exit(1);
+            }
+            genRead(current);
+            current = NULL; // Exit loop
+        } 
+        else {
+            fprintf(stderr, "Error: Invalid read target (expected variable or list)\n");
+            exit(1);
+        }
+    }
+}
+
+void genIfStmt(expr_node* cond, stmt_list* thenStmt, stmt_list* elseStmt) {
+    static int labelCount = 0;
+    int condReg = getReg();
+    genExpr(cond, condReg);
+    fprintf(asmFile, "\tbeqz $t%d, ELSE_%d\n", condReg, labelCount);
+    freeReg();
+    genStmtList(thenStmt);
+    fprintf(asmFile, "\tj ENDIF_%d\n", labelCount);
+    fprintf(asmFile, "ELSE_%d:\n", labelCount);
+    if (elseStmt)
+        genStmtList(elseStmt);
+    fprintf(asmFile, "ENDIF_%d:\n", labelCount);
+    labelCount++;
+}
+// For loop
+void genForLoop(stmt_list* init, expr_node* cond, stmt_list* update, stmt_list* body) {
+    static int loopCount = 0;
+    genStmtList(init);
+    fprintf(asmFile, "LOOP_%d:\n", loopCount);
+    int condReg = getReg();
+    genExpr(cond, condReg);
+    fprintf(asmFile, "    beqz $t%d, ENDLOOP_%d\n", condReg, loopCount);
+    freeReg();
+    genStmtList(body);
+    genStmtList(update);
+    fprintf(asmFile, "    j LOOP_%d\n", loopCount);
+    fprintf(asmFile, "ENDLOOP_%d:\n", loopCount);
+    loopCount++;
+}
+
+void genStmtList(stmt_list* stmt) {
+    while (stmt) {
+        switch (stmt->type) {
+            case ASSIGN:
+                genAssign(stmt->tree.root->left, stmt->tree.root->right);
+                break;
+            case WRITE_STMT:
+                genWriteStmt(stmt->tree.root);
+                break;
+            case READ_STMT:  // This case is missing in your code
+                genReadStmt(stmt->tree.root);
+                break;
+            case COND_STMT:
+                switch (stmt->tree.cond_stmt.type) {
+                    case IFCONDITION: 
+                        genIfStmt(stmt->tree.cond_stmt.condition, stmt->tree.cond_stmt.s1, stmt->tree.cond_stmt.s2);
+                        break;
+                    case FORLOOPCONDITION:
+                        genForLoop(stmt->tree.cond_stmt.startAssign, stmt->tree.cond_stmt.condition, 
+                                  stmt->tree.cond_stmt.updateAssign, stmt->tree.cond_stmt.s1);
+                        break;
+                }
+                break;
+        }
+        stmt = stmt->next;
+    }
+}
+
+
+
+// Generate MIPS assembly for a do-while loop
+void genDoWhileLoop(expr_node* condition, stmt_list* body) {
+    const char* loopLabel = newLabel("do_loop");
+    const char* endLabel  = newLabel("do_end");
+
+    // loop start
+    fprintf(asmFile, "%s:\n", loopLabel);
+
+    // body
+    genStmtList(body);
+
+    // evaluate condition register
+    int condReg = getReg();
+    genExpr(condition, condReg);
+
+    // if true, jump back to top
+    fprintf(asmFile, "\tbne $t%d,$zero,%s\n", condReg, loopLabel);
+    freeReg();
+
+    // end label
+    fprintf(asmFile, "%s:\n", endLabel);
+}
+
+// Main code generation entry
+void genProgCode(stmt_list *root) {
+    genDataSection();
+    genMainPrologue();
+    genStmtList(root);
+    genMainEpilogue();
+    genErrorHandlers();
+}
+
+// File initialization
+// Initialize assembly file
+void initAssemblyFile(const char* inputFileName) {
+    char outputFileName[256];
+    snprintf(outputFileName, sizeof(outputFileName), "%.*s.s", 
+        (int)(strrchr(inputFileName, '.') - inputFileName), inputFileName);
+    
+    asmFile = fopen(outputFileName, "w");
+    if (!asmFile) {
+        perror("Error creating assembly file");
+        exit(1);
+    }
+
+    // Write initial headers
+    fprintf(asmFile, "\t.file\t1 \"%s\"\n", inputFileName);
+    fprintf(asmFile, "\t.section .mdebug.abi32\n\t.previous\n");
+    fprintf(asmFile, "\t.nan\tlegacy\n\t.module fp=xx\n\t.module nooddspreg\n");
+    fprintf(asmFile, "\t.abicalls\n\t.text\n");
+}
+
+void finalizeAssemblyFile() {
+    if(asmFile) fclose(asmFile);
+}
+
+

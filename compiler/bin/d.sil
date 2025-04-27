@@ -1,0 +1,23 @@
+
+
+begindecl
+  integer arr[16];
+  integer len;
+  integer i;
+enddecl
+
+begin
+  read(len); 
+  
+  for(i = 0; i < len; i++) {
+    read(arr[i]);
+  }
+
+  for(i = 0; i < len; i++) {
+    if(arr[i] != i) {
+      break;
+    }
+  }
+
+  write(i);
+end
