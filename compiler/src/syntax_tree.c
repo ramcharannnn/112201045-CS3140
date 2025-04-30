@@ -214,6 +214,9 @@ void printExpr(expr_node* root, int indent) {
                     case NOTEQUALS:
                         printf("NOTEQUALS\n");
                         break;
+                    case LIST:
+                        printf("LIST\n");
+                        break;
                     default:
                         printf("Unknown OP\n");
                         break;
@@ -401,6 +404,10 @@ int evalExpr(expr_node* root, int line_num) {
             }
         }
         case OP:
+                if (root->op == LIST) {
+                fprintf(stderr, "Error: Cannot evaluate LIST directly as expression.\n");
+                exit(1);
+            }
             switch (root->op) {
                 case ADD:
                     return evalExpr(root->left, line_num) + evalExpr(root->right, line_num);
@@ -428,6 +435,7 @@ int evalExpr(expr_node* root, int line_num) {
                     return evalExpr(root->left, line_num) >= evalExpr(root->right, line_num);
                 case NOTEQUALS:
                     return evalExpr(root->left, line_num) != evalExpr(root->right, line_num);
+                    
                 default:
                     fprintf(stderr, "Error: Unknown operator type\n");
                     exit(1);
@@ -439,9 +447,38 @@ int evalExpr(expr_node* root, int line_num) {
 }
 
 
+// void writeStmt(expr_node* node) {
+//     printf("%d\n", evalExpr(node, 0));
+// }
 void writeStmt(expr_node* node) {
-    printf("%d\n", evalExpr(node, 0));
+    expr_node* current = node;
+    int is_first = 1;
+
+    while (current) {
+        if (current->type == OP && current->op == LIST) {
+            printf("%d", evalExpr(current->left, 0));
+            printf(" ");
+            current = current->right;
+        } else {
+            printf("%d\n", evalExpr(current, 0));
+            break;
+        }
+    }
 }
+
+void readStmt(expr_node* node) {
+    // Used only in interpreter, safe to comment for MIPS
+    expr_node* current = node;
+    while (current) {
+        if (current->type == OP && current->op == LIST)
+            current = current->right;
+        else
+            break;
+    }
+}
+
+
+
 int break_flag =0;
 void evalProg(stmt_list* root) {
     while (root) {
@@ -458,9 +495,16 @@ void evalProg(stmt_list* root) {
                 }
                 break;
             }
+            case READ_STMT:
+                readStmt(root->tree.root);
+                break;
             case WRITE_STMT:
+                if (root->tree.root->type == OP && root->tree.root->op == LIST) {
+                    // safe
+                }
                 writeStmt(root->tree.root);
                 break;
+
             case BREAK_STMT:
                    break_flag = 1; 
                   
@@ -770,16 +814,33 @@ void genErrorHandlers() {
     fprintf(asmFile, "\tsyscall\n");
 }
 
+
+
 void genDataSection() {
+    // Format strings for scanf and printf
+    // fprintf(asmFile, ".data\n");
+    // fprintf(asmFile, "newline: .asciiz \"\\n\"\n");
+    fprintf(asmFile, ".section .rdata\n");
+    fprintf(asmFile, ".align 2\n");
+    fprintf(asmFile, "$LC0:\n\t.ascii \"%%d\\000\"\n");
+    fprintf(asmFile, "$LC1:\n\t.ascii \"%%d\\012\\000\"\n");  // "%d\n"
+
+    // Declare global variables in .data
     fprintf(asmFile, ".data\n");
     fprintf(asmFile, ".align 2\n");
     fprintf(asmFile, "array_bounds_error: .asciiz \"Array index out of bounds!\\n\"\n");
     fprintf(asmFile, "div_by_zero_msg: .asciiz \"Division by zero error!\\n\"\n");
-    
+
     for (int i = 0; i < symbolTableIndex; i++) {
         if (symbolTable[i].check == DEF) {
+            fprintf(asmFile, ".globl %s\n", symbolTable[i].name);
             fprintf(asmFile, ".align 2\n");
-            fprintf(asmFile, "%s: .space %d\n", 
+            fprintf(asmFile, ".type %s, @object\n", symbolTable[i].name);
+            fprintf(asmFile, ".size %s, %d\n", 
+                symbolTable[i].name, 
+                (symbolTable[i].array_size > 0) ? 
+                symbolTable[i].array_size * 4 : 4);
+            fprintf(asmFile, "%s:\n.space %d\n", 
                 symbolTable[i].name, 
                 (symbolTable[i].array_size > 0) ? 
                 symbolTable[i].array_size * 4 : 4);
@@ -787,23 +848,39 @@ void genDataSection() {
     }
 }
 
+
 void genMainPrologue() {
-    fprintf(asmFile, ".text\n.globl main\nmain:\n");
-    fprintf(asmFile, "\taddiu $sp,$sp,-%d\n", FRAME_SIZE);
-    fprintf(asmFile, "\tsw $fp,%d($sp)\n", FRAME_SIZE-4);
-    fprintf(asmFile, "\tsw $ra,%d($sp)\n", FRAME_SIZE-8);
-    fprintf(asmFile, "\tmove $fp,$sp\n");
+    fprintf(asmFile, ".text\n");
+    fprintf(asmFile, ".align 2\n");
+    fprintf(asmFile, ".globl main\n");
+    fprintf(asmFile, ".set nomips16\n");
+    fprintf(asmFile, ".set nomicromips\n");
+    fprintf(asmFile, ".ent main\n");
+    fprintf(asmFile, ".type main, @function\n");
+    fprintf(asmFile, "main:\n");
+    fprintf(asmFile, ".frame $fp, 40, $31\n");
+    fprintf(asmFile, ".mask 0xc0000000, -4\n");
+    fprintf(asmFile, ".fmask 0x00000000, 0\n");
+
+
+    fprintf(asmFile, "addiu $sp, $sp, -40\n");
+    fprintf(asmFile, "sw $31, 36($sp)\n");
+    fprintf(asmFile, "sw $fp, 32($sp)\n");
+    fprintf(asmFile, "move $fp, $sp\n");
+    fprintf(asmFile, ".cprestore 16\n");  // Optional, for compatibility with jal calls
+
 }
 
 void genMainEpilogue() {
-    fprintf(asmFile, "\tmove $sp,$fp\n");
-    fprintf(asmFile, "\tlw $ra,%d($sp)\n", FRAME_SIZE-8);
-    fprintf(asmFile, "\tlw $fp,%d($sp)\n", FRAME_SIZE-4);
-    fprintf(asmFile, "\taddiu $sp,$sp,%d\n", FRAME_SIZE);
-    fprintf(asmFile, "\tli $v0,10\n");  // Exit syscall
-    fprintf(asmFile, "\tsyscall\n");
+    fprintf(asmFile, "move $sp, $fp\n");
+    fprintf(asmFile, "lw $31, 36($sp)\n");
+    fprintf(asmFile, "lw $fp, 32($sp)\n");
+    fprintf(asmFile, "addiu $sp, $sp, 40\n");
+    fprintf(asmFile, "li $v0, 10\n");  // Exit syscall
+    fprintf(asmFile, "syscall\n");
+    fprintf(asmFile, ".end main\n");
+    fprintf(asmFile, ".size main, .-main\n");
 }
-   
 void genExpr(expr_node* node, int targetReg) {
     if (!node) return;
 
@@ -819,13 +896,20 @@ void genExpr(expr_node* node, int targetReg) {
             if (node->index) {
             int idxReg = getReg();
             genExpr(node->index, idxReg);
-            fprintf(asmFile, "la $t%d, %s\n", targetReg, node->name); // Base address
+            // fprintf(asmFile, "la $t%d, %s\n", targetReg, node->name); // Base address
+             fprintf(asmFile, "la $t%d, %s\n", targetReg, node->name); // Base address
             fprintf(asmFile, "sll $t%d, $t%d, 2\n", idxReg, idxReg); // Multiply index by 4
             fprintf(asmFile, "addu $t%d, $t%d, $t%d\n", targetReg, targetReg, idxReg); // Add offset
             fprintf(asmFile, "lw $t%d, 0($t%d)\n", targetReg, targetReg); // Load value
             freeReg();
             } else {
-                fprintf(asmFile, "    lw $t%d, %s\n", targetReg, node->name);
+                // fprintf(asmFile, "    lw $t%d, %s\n", targetReg, node->name);
+                fprintf(asmFile, "    la $t%d, %s\n", targetReg + 1, node->name);
+                fprintf(asmFile, "    lw $t%d, 0($t%d)\n", targetReg, targetReg + 1);
+                // fprintf(asmFile, "lw $t%d, %%got(%s)($gp)\n", targetReg + 1, node->name);
+                // fprintf(asmFile, "lw $t%d, 0($t%d)\n", targetReg, targetReg + 1);
+
+
             }
             break;
         case OP: {
@@ -849,157 +933,110 @@ void genExpr(expr_node* node, int targetReg) {
         }
     }
 }
-// Assignment generation
+
 void genAssign(expr_node *target, expr_node *value) {
     int valReg = getReg();
     genExpr(value, valReg);
-    
-    if(target->index) {
+
+    if (target->index) {
         int idxReg = getReg();
         genExpr(target->index, idxReg);
         genArrayBoundsCheck(target->name, idxReg);
-        fprintf(asmFile, "\tsll $t%d,$t%d,2\n", idxReg, idxReg);
-        fprintf(asmFile, "\tla $t%d,%s\n", valReg+1, target->name);
-        fprintf(asmFile, "\tadd $t%d,$t%d,$t%d\n", valReg+1, valReg+1, idxReg);
-        fprintf(asmFile, "\tsw $t%d,0($t%d)\n", valReg, valReg+1);
+        
+        // Multiply index by 4
+        fprintf(asmFile, "sll $t%d, $t%d, 2\n", idxReg, idxReg);
+        
+        // Load base address via $gp
+        // fprintf(asmFile, "lw $t%d, %%got(%s)($gp)\n", valReg+1, target->name);
+        fprintf(asmFile, "la $t%d, %s\n", valReg+1, target->name);
+        
+        // Add offset
+        fprintf(asmFile, "addu $t%d, $t%d, $t%d\n", valReg+1, valReg+1, idxReg);
+        
+        // Store value
+        fprintf(asmFile, "sw $t%d, 0($t%d)\n", valReg, valReg+1);
         freeReg();
     } else {
-        fprintf(asmFile, "\tsw $t%d,%s\n", valReg, target->name);
+        // Non-array variable
+        // fprintf(asmFile, "lw $t%d, %%got(%s)($gp)\n", valReg+1, target->name);
+            fprintf(asmFile, "la $t%d, %s\n", valReg+1, target->name);
+        fprintf(asmFile, "sw $t%d, 0($t%d)\n", valReg, valReg+1);
     }
     freeReg();
 }
-
-
+//main
 void genWriteStmt(expr_node* expr) {
     expr_node* current = expr;
-    int is_first = 1;
 
-    while (current != NULL) {
-        // Handle LIST nodes (multiple arguments)
+    while (current) {
         if (current->type == OP && current->op == LIST) {
-            // Process left operand (current value to print)
             int reg = getReg();
             genExpr(current->left, reg);
-            
-            // Print space separator after first element
-            if (!is_first) {
-                fprintf(asmFile, "\tli $a0, 32\n");  // ASCII space
-                fprintf(asmFile, "\tli $v0, 11\n");
-                fprintf(asmFile, "\tsyscall\n");
-            }
-            
-            // Print the value
-            fprintf(asmFile, "\tmove $a0, $t%d\n", reg);
-            fprintf(asmFile, "\tli $v0, 1\n");
-            fprintf(asmFile, "\tsyscall\n");
+
+            fprintf(asmFile, "move $5, $t%d\n", reg);  // Argument for printf
+            fprintf(asmFile, "la $4, $LC1\n");         // "%d\\n"
+            fprintf(asmFile, "jal printf\n");
+
             freeReg();
-            
-            is_first = 0;
             current = current->right;
-        } 
-        // Handle single argument or last element
-        else {
+        } else {
             int reg = getReg();
             genExpr(current, reg);
-            
-            // Print space separator if not first
-            if (!is_first) {
-                fprintf(asmFile, "\tli $a0, 32\n");
-                fprintf(asmFile, "\tli $v0, 11\n");
-                fprintf(asmFile, "\tsyscall\n");
-            }
-            
-            fprintf(asmFile, "\tmove $a0, $t%d\n", reg);
-            fprintf(asmFile, "\tli $v0, 1\n");
-            fprintf(asmFile, "\tsyscall\n");
+
+            fprintf(asmFile, "move $5, $t%d\n", reg);
+            fprintf(asmFile, "la $4, $LC1\n");
+            fprintf(asmFile, "jal printf\n");
+
             freeReg();
             current = NULL;
         }
     }
-    
-    // Print newline after all arguments
-    fprintf(asmFile, "\tli $a0, 10\n");  // ASCII newline
-    fprintf(asmFile, "\tli $v0, 11\n");
-    fprintf(asmFile, "\tsyscall\n");
 }
+
+
+
 void checkVariableExists(char* name, int line) {
     if (search(name).check == UNDECL) {
         fprintf(stderr, "Error: Variable '%s' undeclared (line %d)\n", name, line);
         exit(1);
     }
 }
-
-
-// Helper to read into a single variable/array element
+//main
 void genRead(expr_node *target) {
-    if (target->type != VARIABLE || target->name == NULL) {
-        fprintf(stderr, "Error: Invalid read target\n");
-        exit(1);
-    }
-        SearchResult res = search(target->name);
-    if (res.check == UNDECL) {
-        fprintf(stderr, "Error: Reading undeclared variable '%s'\n", target->name);
-        exit(1);
-    }
     int addrReg = getReg();
-    
-    if (target->index) {  // Array element
+
+    if (target->index) {
         int idxReg = getReg();
         genExpr(target->index, idxReg);
         genArrayBoundsCheck(target->name, idxReg);
-        
-        // Calculate address: base + index*4
-        fprintf(asmFile, "\tsll $t%d, $t%d, 2\n", idxReg, idxReg);
-        fprintf(asmFile, "\tla $t%d, %s\n", addrReg, target->name);
-        fprintf(asmFile, "\tadd $t%d, $t%d, $t%d\n", addrReg, addrReg, idxReg);
+        fprintf(asmFile, "sll $t%d, $t%d, 2\n", idxReg, idxReg);
+        fprintf(asmFile, "la $t%d, %s\n", addrReg, target->name);
+        fprintf(asmFile, "addu $t%d, $t%d, $t%d\n", addrReg, addrReg, idxReg);
         freeReg();
-    } else {  // Simple variable
-        fprintf(asmFile, "\tla $t%d, %s\n", addrReg, target->name);
+    } else {
+        fprintf(asmFile, "la $t%d, %s\n", addrReg, target->name);
     }
-    
-    // Read input
-    fprintf(asmFile, "\tli $v0, 5\n");
-    fprintf(asmFile, "\tsyscall\n");
-    
-    // Store value
-    fprintf(asmFile, "\tsw $v0, 0($t%d)\n", addrReg);
+
+    // Arguments for scanf: $a0 = format string, $a1 = address
+    fprintf(asmFile, "move $5, $t%d\n", addrReg);
+    fprintf(asmFile, "la $4, $LC0\n");  // "%d"
+    fprintf(asmFile, "jal __isoc99_scanf\n");
     freeReg();
 }
 
+// void genRead(expr_node *target) {
+
+//main
 void genReadStmt(expr_node *exprList) {
     expr_node *current = exprList;
     while (current) {
         if (current->type == OP && current->op == LIST) {
-            // Handle comma-separated list
-            if (current->left->type != VARIABLE || current->left->name == NULL) {
-                fprintf(stderr, "Error: Invalid read target in list\n");
-                exit(1);
-            }
-
-            // Check if variable is declared
-            SearchResult res = search(current->left->name);
-            if (res.check == UNDECL) {
-                fprintf(stderr, "Error: Reading undeclared variable '%s'\n", current->left->name);
-                exit(1);
-            }
-
-            // Generate code for this variable
             genRead(current->left);
-
-            // Move to next element in the list
             current = current->right;
-        } 
-        else if (current->type == VARIABLE) {
-            // Single variable case
-            SearchResult res = search(current->name);
-            if (res.check == UNDECL) {
-                fprintf(stderr, "Error: Reading undeclared variable '%s'\n", current->name);
-                exit(1);
-            }
+        } else if (current->type == VARIABLE) {
             genRead(current);
-            current = NULL; // Exit loop
-        } 
-        else {
+            current = NULL;
+        } else {
             fprintf(stderr, "Error: Invalid read target (expected variable or list)\n");
             exit(1);
         }

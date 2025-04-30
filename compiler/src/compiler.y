@@ -58,7 +58,7 @@
 %left '+' '-'
 %left '*' '/'
 
-%type <expr_ptr> expr var_expr exprList
+%type <expr_ptr> expr var_expr exprList 
 %type <stmt_list_ptr> Prog statement stmt_list assign_stmt write_stmt read_stmt cond_stmt Gdecl_sec Gdecl_list Gdecl MainBlock Ldecl_sec Ldecl_list Ldecl init_assign update_assign
 %type <num> ret_type type
 %type <decl_node_ptr> Glist Gid Lid Lid_list
@@ -238,9 +238,9 @@ statement:  assign_stmt  ';'    {$$ = $1; }
     |    BREAK ';'                { $$ = newStmt(BREAK_STMT, NULL, NULL, NULL, NULL); $$->line_num = lineno; }
     ;
 //
-write_stmt: WRITE '(' exprList ')' { $$ = newStmt(WRITE_STMT, $3, NULL, NULL, NULL); $$->line_num = lineno; }
+write_stmt: WRITE '(' exprList')' { $$ = newStmt(WRITE_STMT, $3, NULL, NULL, NULL); $$->line_num = lineno; }
     ;
-read_stmt: READ '(' exprList ')' {
+read_stmt: READ '('exprList')' {
     $$ = newStmt(READ_STMT, $3, NULL, NULL,NULL);
     $$->line_num = lineno;
 
@@ -257,9 +257,7 @@ read_stmt: READ '(' exprList ')' {
 }
 
 exprList: expr                   { $$ = $1; }
-        | exprList ',' expr      { 
-            $$ = opNode(LIST, $1, $3, OP, 0, NULL, NULL); 
-          }
+        | expr ',' exprList    {  $$ = opNode(OP, $1, $3, LIST, 0, NULL, NULL); }
         ;
 
 assign_stmt:  var_expr '=' expr         { $$ = newStmt(ASSIGN , $1 , $3, NULL, NULL);    $$->line_num = lineno ;   }
